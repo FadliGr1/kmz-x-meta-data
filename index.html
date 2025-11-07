@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KMZ Image Extractor (v2.4 - Paksa Konversi)</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/piexifjs/1.0.6/piexif.min.js"></script>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 700px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 25px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            text-align: center;
+            color: #1a237e;
+            margin-top: 0;
+        }
+
+        input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 15px;
+            border: 2px dashed #c0c0c0;
+            border-radius: 6px;
+            background-color: #fafafa;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+
+        input[type="file"]:hover {
+            border-color: #1a237e;
+        }
+
+        button {
+            width: 100%;
+            padding: 15px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #ffffff;
+            background-color: #1a237e;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:disabled {
+            background-color: #9fa8da;
+            cursor: not-allowed;
+        }
+
+        button:not(:disabled):hover {
+            background-color: #3949ab;
+        }
+
+        #log-container {
+            margin-top: 20px;
+        }
+
+        pre#logArea {
+            background-color: #263238;
+            color: #eceff1;
+            font-family: "Courier New", Courier, monospace;
+            padding: 15px;
+            border-radius: 6px;
+            height: 300px;
+            overflow-y: scroll;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        #downloadLink {
+            display: none;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 15px;
+            margin-top: 15px;
+            text-align: center;
+            font-size: 16px;
+            font-weight: bold;
+            color: #ffffff;
+            background-color: #00897b;
+            border-radius: 6px;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+        }
+
+        #downloadLink:hover {
+            background-color: #00695c;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Extract Foto dari KMZ (v2.4 - Include Metadata)</h1>
+        <p>Alat ini akan mengekstrak foto, **memaksa konversi semua gambar ke JPEG** untuk memastikan kompatibilitas,
+            menambahkan metadata GPS, dan menyimpannya ke ZIP.</p>
+        <p>By FadliGr</p>
+
+        <input type="file" id="kmzFile" accept=".kmz">
+
+        <button id="processButton">Proses KMZ</button>
+
+        <a id="downloadLink" download="hasil_ekstrak_gps.zip">Download Hasil ZIP</a>
+
+        <div id="log-container">
+            <h3>Log Proses:</h3>
+            <pre id="logArea">Menunggu file KMZ...</pre>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('kmzFile');
+        const processButton = document.getElementById('processButton');
+        const downloadLink = document.getElementById('downloadLink');
+        const logArea = document.getElementById('logArea');
+
+        processButton.addEventListener('click', handleFileProcess);
+
+        /**
+         * Mengubah derajat desimal menjadi format EXIF DMS (Degree, Minute, Second).
+         */
+        function degToDms(deg) {
+            var d = Math.floor(deg);
+            var m = Math.floor((deg - d) * 60);
+            var s = Math.round((deg - d - m / 60) * 3600 * 100);
+            return [[d, 1], [m, 1], [s, 100]];
+        }
+
+        function log(message) {
+            console.log(message);
+            logArea.textContent += `[${new Date().toLocaleTimeString()}] ${message}\n`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        async function handleFileProcess() {
+            const file = fileInput.files[0];
+            if (!file) {
+                log("❌ ERROR: Tolong pilih file KMZ terlebih dahulu.");
+                return;
+            }
+
+            logArea.textContent = "";
+            downloadLink.style.display = 'none';
+            downloadLink.href = '';
+            processButton.disabled = true;
+            processButton.textContent = 'Memproses...';
+
+            log(`🚀 Memulai proses untuk file: ${file.name}`);
+
+            try {
+                const inputZip = new JSZip();
+                const outputZip = new JSZip();
+
+                log("... Membaca file KMZ ...");
+                const loadedZip = await inputZip.loadAsync(file);
+
+                let kmlFile = loadedZip.file("doc.kml");
+                if (!kmlFile) {
+                    const kmlFileNames = Object.keys(loadedZip.files).filter(name => name.endsWith('.kml'));
+                    if (kmlFileNames.length > 0) {
+                        kmlFile = loadedZip.file(kmlFileNames[0]);
+                    }
+                }
+                if (!kmlFile) throw new Error("Tidak ditemukan file .kml di dalam arsip KMZ.");
+
+                log(`📄 Ditemukan file KML: ${kmlFile.name}`);
+                const kmlText = await kmlFile.async("string");
+                const parser = new DOMParser();
+                const kmlDoc = parser.parseFromString(kmlText, "application/xml");
+
+                const placemarks = kmlDoc.getElementsByTagName("Placemark");
+                log(`📍 Ditemukan ${placemarks.length} Placemark.`);
+                log("---");
+
+                let photosFound = 0;
+                let noPhotosFound = 0;
+
+                for (let i = 0; i < placemarks.length; i++) {
+                    const placemark = placemarks[i];
+
+                    const nameElement = placemark.getElementsByTagName("name")[0];
+                    if (!nameElement) {
+                        log(`⚠️ Melewatkan Placemark ke-${i + 1} karena tidak memiliki tag <name>.`);
+                        continue;
+                    }
+                    const placemarkName = nameElement.textContent.trim();
+
+                    const pointElement = placemark.getElementsByTagName("Point")[0];
+                    const coordinatesElement = pointElement ? pointElement.getElementsByTagName("coordinates")[0] : null;
+                    let coords = null;
+
+                    if (coordinatesElement) {
+                        const coordsText = coordinatesElement.textContent.trim();
+                        const parts = coordsText.split(',');
+                        if (parts.length >= 2) {
+                            coords = {
+                                longitude: parseFloat(parts[0]),
+                                latitude: parseFloat(parts[1])
+                            };
+                            log(`🗺️ Placemark '${placemarkName}': Ditemukan koordinat: ${coords.latitude}, ${coords.longitude}`);
+                        }
+                    } else {
+                        log(`⚠️ Placemark '${placemarkName}': Tidak ditemukan tag <Point> atau <coordinates>.`);
+                    }
+
+                    const descElement = placemark.getElementsByTagName("description")[0];
+                    if (!descElement) {
+                        log(`📝 Placemark '${placemarkName}': Tidak ada <description>.`);
+                        log(`   -> Membuat file ${placemarkName}_no_photo.txt`);
+                        outputZip.file(`${placemarkName}_no_photo.txt`, "Placemark tidak memiliki tag <description>.");
+                        noPhotosFound++;
+                        continue;
+                    }
+
+                    const descCdata = descElement.textContent;
+                    const descParser = new DOMParser();
+                    const descDoc = descParser.parseFromString(descCdata, "text/html");
+                    const imgElement = descDoc.querySelector("img");
+
+                    if (imgElement) {
+                        const imgSrc = imgElement.getAttribute("src");
+                        if (!imgSrc) {
+                            log(`⚠️ Placemark '${placemarkName}': <img> ada tapi 'src' kosong.`);
+                            log(`   -> Membuat file ${placemarkName}_no_photo.txt`);
+                            outputZip.file(`${placemarkName}_no_photo.txt`, "Placemark memiliki tag <img> tapi atribut 'src' kosong.");
+                            noPhotosFound++;
+                            continue;
+                        }
+
+                        const imageFile = loadedZip.file(imgSrc);
+                        if (imageFile) {
+                            // --- PERUBAHAN LOGIKA UTAMA DI SINI ---
+
+                            // Nama file output akan SELALU .jpg
+                            const newFileName = `${placemarkName}.jpg`;
+                            let imageBlob = await imageFile.async("blob");
+
+                            if (coords) {
+                                // Ada koordinat, kita WAJIB menyuntikkan EXIF.
+                                log(`   -> Memproses ${newFileName} dengan GPS...`);
+                                try {
+                                    // LANGKAH 1: SELALU konversi ke JPEG standar (laundering)
+                                    // Ini adalah kunci perbaikannya.
+                                    log(`      -> (1/4) Memastikan format JPEG standar...`);
+                                    const jpegBlob = await convertImageToJpeg(imageBlob);
+
+                                    log(`      -> (2/4) Mengonversi JPEG ke Base64...`);
+                                    const base64Image = await blobToBase64(jpegBlob);
+
+                                    // LANGKAH 2: Menyiapkan data GPS
+                                    log(`      -> (3/4) Menyiapkan & menyuntikkan data GPS...`);
+                                    const gpsData = {};
+                                    gpsData[piexif.GPSIFD.GPSLatitudeRef] = coords.latitude < 0 ? 'S' : 'N';
+                                    gpsData[piexif.GPSIFD.GPSLatitude] = degToDms(Math.abs(coords.latitude));
+                                    gpsData[piexif.GPSIFD.GPSLongitudeRef] = coords.longitude < 0 ? 'W' : 'E';
+                                    gpsData[piexif.GPSIFD.GPSLongitude] = degToDms(Math.abs(coords.longitude));
+
+                                    const exifObj = { "GPS": gpsData };
+                                    const exifBytes = piexif.dump(exifObj);
+
+                                    // LANGKAH 3: Menyuntikkan EXIF
+                                    const newBase64Image = piexif.insert(exifBytes, base64Image);
+
+                                    // LANGKAH 4: Konversi kembali ke Blob
+                                    log(`      -> (4/4) Mengonversi kembali ke Blob...`);
+                                    imageBlob = await base64ToBlob(newBase64Image); // 'imageBlob' sekarang berisi JPEG + GPS
+                                    log(`   -> ✅ GPS berhasil disuntikkan ke ${newFileName}`);
+
+                                } catch (processError) {
+                                    log(`   -> ⚠️ GAGAL memproses ${newFileName}: ${processError.message}.`);
+                                    log(`   -> Menyimpan file yang sudah dikonversi (tanpa GPS).`);
+                                    // Jika gagal (misal 'not jpeg' error dari 'piexif'), 
+                                    // kita coba konversi lagi untuk memastikan 'imageBlob' adalah JPEG
+                                    try {
+                                        imageBlob = await convertImageToJpeg(imageBlob);
+                                    } catch (e) { /* abaikan error konversi sekunder */ }
+                                }
+                            } else {
+                                // Tidak ada koordinat, tapi permintaan user adalah konversi ke JPEG.
+                                log(`   -> (Info) Tidak ada koordinat KML. Mengonversi ke JPEG...`);
+                                try {
+                                    imageBlob = await convertImageToJpeg(imageBlob);
+                                } catch (convertError) {
+                                    log(`   -> ⚠️ GAGAL mengonversi ${newFileName} ke JPEG: ${convertError.message}. Menyimpan file asli.`);
+                                }
+                            }
+
+                            // --- AKHIR PERUBAHAN LOGIKA ---
+
+                            outputZip.file(newFileName, imageBlob);
+                            log(`   -> Disimpan sebagai ${newFileName}`);
+                            photosFound++;
+                        } else {
+                            log(`❌ ERROR: Placemark '${placemarkName}': Gambar '${imgSrc}' TIDAK DITEMUKAN di KMZ.`);
+                            log(`   -> Membuat file ${placemarkName}_no_photo.txt`);
+                            outputZip.file(`${placemarkName}_no_photo.txt`, `File gambar '${imgSrc}' tidak ditemukan di dalam arsip KMZ.`);
+                            noPhotosFound++;
+                        }
+
+                    } else {
+                        log(`📝 Placemark '${placemarkName}': Tidak ditemukan <img> di deskripsi.`);
+                        log(`   -> Membuat file ${placemarkName}_no_photo.txt`);
+                        outputZip.file(`${placemarkName}_no_photo.txt`, "Tidak ada tag <img> di dalam deskripsi Placemark.");
+                        noPhotosFound++;
+                    }
+                    log("---");
+                }
+
+                log("... Menghasilkan file ZIP output ...");
+                const outputBlob = await outputZip.generateAsync({ type: "blob" });
+
+                const url = URL.createObjectURL(outputBlob);
+                downloadLink.href = url;
+                downloadLink.style.display = 'block';
+
+                log("🎉 SELESAI!");
+                log(`Total: ${photosFound} foto diekstrak dan dikonversi, ${noPhotosFound} file .txt dibuat.`);
+                log("Klik link di atas untuk men-download file ZIP.");
+
+            } catch (error) {
+                log(`🔥🔥 ERROR BESAR: ${error.message}`);
+                console.error(error);
+            } finally {
+                processButton.disabled = false;
+                processButton.textContent = 'Proses KMZ';
+            }
+        }
+
+        // --- Helper Functions untuk Konversi (TETAP SAMA) ---
+
+        /**
+         * Mengubah Blob (file) menjadi string Base64
+         */
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        /**
+         * Mengubah string Base64 (setelah dimodif piexif) kembali menjadi Blob
+         */
+        function base64ToBlob(base64) {
+            return new Promise((resolve, reject) => {
+                try {
+                    const parts = base64.split(';base64,');
+                    const contentType = parts[0].split(':')[1];
+                    const raw = window.atob(parts[1]);
+                    const rawLength = raw.length;
+                    const uInt8Array = new Uint8Array(rawLength);
+                    for (let i = 0; i < rawLength; ++i) {
+                        uInt8Array[i] = raw.charCodeAt(i);
+                    }
+                    resolve(new Blob([uInt8Array], { type: contentType }));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        }
+
+        /**
+         * Mengonversi Blob gambar ke format JPEG Blob menggunakan <canvas>.
+         */
+        function convertImageToJpeg(imageBlob, quality = 0.9) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const url = URL.createObjectURL(imageBlob);
+
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+
+                    canvas.toBlob((jpegBlob) => {
+                        URL.revokeObjectURL(url); // Bersihkan URL objek
+                        if (jpegBlob) {
+                            resolve(jpegBlob);
+                        } else {
+                            reject(new Error("Gagal mengonversi gambar ke JPEG."));
+                        }
+                    }, 'image/jpeg', quality);
+                };
+
+                img.onerror = (e) => {
+                    URL.revokeObjectURL(url); // Bersihkan URL objek
+                    reject(new Error(`Gagal memuat gambar untuk konversi.`));
+                };
+
+                img.src = url;
+            });
+        }
+
+    </script>
+
+</body>
+
+</html>
